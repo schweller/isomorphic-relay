@@ -2,66 +2,150 @@ import GraphQLFragmentPointer from 'react-relay/lib/GraphQLFragmentPointer';
 import Relay from 'react-relay';
 import RelayQuery from 'react-relay/lib/RelayQuery';
 import RelayRenderer from 'react-relay/lib/RelayRenderer';
+import RelayStore from 'react-relay/lib/RelayStore';
 import RelayStoreData from 'react-relay/lib/RelayStoreData';
 
+import checkRelayQueryData from 'react-relay/lib/checkRelayQueryData';
+import flattenSplitRelayQueries from 'react-relay/lib/flattenSplitRelayQueries';
+import splitDeferredRelayQueries from 'react-relay/lib/splitDeferredRelayQueries';
+
 export default class IsomorphicRenderer extends RelayRenderer {
-    _runQueries(props) {
-        // _runQueries should not be called on server side,
-        // so don't call it from constructor, and call it from componentDidMount instead
-        return this.state ?
-            super._runQueries(props) :
-            this._createInitialIsomorphicState(props);
-    }
+    static displayName = 'IsomorphicRenderer';
+    // Static members are not inherited on <IE11. So, we have to redefine them.
+    static propTypes = RelayRenderer.propTypes;
+    static childContextTypes = RelayRenderer.childContextTypes;
 
-    componentDidMount() {
-        if ((!this.state.readyState || this.props.forceFetch) && !this.state.pendingRequest) {
-            this.setState(super._runQueries(this.props));
-        }
-    }
+    _buildInitialState() {
+        const {Component, forceFetch, queryConfig} = this.props;
 
-    _createInitialIsomorphicState({Component, forceFetch, queryConfig}) {
         const querySet = Relay.getQueries(Component, queryConfig);
-        const fragmentPointers = createFragmentPointersForRoots(querySet);
 
-        return isDataReady(querySet, fragmentPointers) ? {
-            activeComponent: Component,
-            activeQueryConfig: queryConfig,
-            pendingRequest: null,
-            readyState: {
+        const {done, ready} = checkCache(querySet);
+
+        if (ready) {
+            const props = {
+                ...queryConfig.params,
+                ...createFragmentPointersForRoots(querySet),
+            };
+            const readyState = {
                 aborted: false,
-                done: true,
+                done: done && !forceFetch,
                 error: null,
                 mounted: true,
                 ready: true,
-                stale: forceFetch,
-            },
+                stale: !!forceFetch,
+            };
+            return this._buildState(Component, queryConfig, readyState, props);
+        }
+
+        return this._buildState(null, null, null, null);
+    }
+
+    _buildState(activeComponent, activeQueryConfig, readyState, props) {
+        return {
+            activeComponent,
+            activeQueryConfig,
+            readyState: readyState && {...readyState, mounted: true},
             renderArgs: {
-                done: true,
-                error: null,
-                props: {
-                    ...queryConfig.params,
-                    ...fragmentPointers,
-                },
-                retry: this._retry.bind(this),
-                stale: forceFetch,
-            },
-        } : {
-            activeComponent: null,
-            activeQueryConfig: null,
-            pendingRequest: null,
-            readyState: null,
-            renderArgs: {
-                done: false,
-                error: null,
-                props: null,
-                retry: this._retry.bind(this),
-                stale: false,
+                done: !!readyState && readyState.done,
+                error: readyState && readyState.error,
+                props,
+                retry: () => this._retry(),
+                stale: !!readyState && readyState.stale,
             },
         };
+    }
+
+    componentDidMount() {
+        const {readyState} = this.state;
+        if (!readyState || !readyState.done) {
+            this._runQueries(this.props);
+        }
+    }
+
+    _runQueries({Component, forceFetch, queryConfig}) {
+        if (!this.state) {
+            // _runQueries should not be called on server side,
+            // so don't call it from constructor, and call it from componentDidMount instead
+            return this._buildInitialState();
+        }
+
+        const querySet = Relay.getQueries(Component, queryConfig);
+        const onReadyStateChange = readyState => {
+            if (!this.mounted) {
+                this._handleReadyStateChange({...readyState, mounted: false});
+                return;
+            }
+
+            if (request !== this.pendingRequest) {
+                // Ignore (abort) ready state if we have a new pending request.
+                return;
+            }
+
+            let {renderArgs: {props, stale}} = this.state;
+            if (props && !readyState.ready) {
+                // Do not regress the prepared ready state.
+                readyState = {...readyState, ready: true, stale};
+            }
+
+            if (readyState.aborted || readyState.done || readyState.error) {
+                this.pendingRequest = null;
+            } else if (props && stale === readyState.stale) {
+                // Do not override the prepared state if there is nothing new.
+                return;
+            }
+
+            if (readyState.ready && !props) {
+                props = {
+                    ...queryConfig.params,
+                    ...createFragmentPointersForRoots(querySet),
+                };
+            }
+
+            this.setState(this._buildState(
+                Component, queryConfig, readyState, props
+            ));
+        };
+
+        if (this.pendingRequest) {
+            this.pendingRequest.abort();
+        }
+
+        const request = this.pendingRequest = forceFetch ?
+            RelayStore.forceFetch(querySet, onReadyStateChange) :
+            RelayStore.primeCache(querySet, onReadyStateChange);
+
+        return this._buildState(
+            this.state.activeComponent, this.state.activeQueryConfig, null, null
+        );
+    }
+
+    componentWillUnmount() {
+        if (this.pendingRequest) {
+            this.pendingRequest.abort();
+        }
+        this.mounted = false;
     }
 }
 
 const queuedStore = RelayStoreData.getDefaultInstance().getQueuedStore();
+
+function checkCache(querySet) {
+    let done = true;
+    const ready = Object.keys(querySet).every(name =>
+        flattenSplitRelayQueries(splitDeferredRelayQueries(querySet[name]))
+            .every(query => {
+                if (!checkRelayQueryData(queuedStore, query)) {
+                    done = false;
+                    if (!query.isDeferred()) {
+                        return false;
+                    }
+                }
+                return true;
+            })
+    );
+    return {done, ready};
+}
 
 function createFragmentPointersForRoots(querySet) {
     const fragmentPointers = {};
@@ -72,11 +156,5 @@ function createFragmentPointersForRoots(querySet) {
     return fragmentPointers;
 }
 
-const createFragmentPointerForRoot = query => query ?
-    GraphQLFragmentPointer.createForRoot(queuedStore, query) :
-    null;
-
-const isDataReady = (querySet, fragmentPointers) =>
-    Object.keys(querySet).every(name => fragmentPointers[name] || !queryHasRootFragment(querySet[name]));
-
-const queryHasRootFragment = query => query && query.getChildren().some(child => child instanceof RelayQuery.Fragment);
+const createFragmentPointerForRoot = query =>
+    query && GraphQLFragmentPointer.createForRoot(queuedStore, query);
