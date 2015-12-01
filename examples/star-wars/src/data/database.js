@@ -72,10 +72,17 @@ var empire = {
   ships: ['6', '7', '8']
 };
 
+var inacio = {
+  id: '3',
+  name: 'My fucking faction',
+  ships: ['1', '3', '4', '6']
+}
+
 var data = {
   Faction: {
     1: rebels,
-    2: empire
+    2: empire,
+    3: inacio
   },
   Ship: {
     1: xwing,
@@ -115,6 +122,9 @@ export function getFactions(names) {
     }
     if (name === 'rebels') {
       return rebels;
+    }
+    if (name === 'inacio') {
+      return inacio;
     }
     return null;
   });

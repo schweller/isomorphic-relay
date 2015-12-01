@@ -18,29 +18,51 @@ class StarWarsApp extends React.Component {
   render() {
     var {factions} = this.props;
     return (
-      <ol>
-        {factions.map(faction => (
-          <li key={faction.id}>
-            <h1>{faction.name}</h1>
-            <ol>
-              {faction.ships.edges.map(edge => (
-                <li key={edge.node.id}><StarWarsShip ship={edge.node} /></li>
-              ))}
-            </ol>
-          </li>
-        ))}
-      </ol>
+      <div>
+        <div>Foo: {this.props.relay.variables.foo}</div>
+        <ol>
+          {factions.map(faction => (
+            <li key={faction.id}>
+              <h1>{faction.name}</h1>
+              <ol>
+                {faction.ships.edges.map(edge => (
+                  <li key={edge.node.id}><StarWarsShip ship={edge.node} /></li>
+                ))}
+              </ol>
+            </li>
+          ))}
+        </ol>
+        <button onClick={this.changeShipCount.bind(this)}>Makes GQL Call</button>
+        <button onClick={this.changeFoo.bind(this)}>View Change / No Call</button>
+      </div>
     );
   }
+
+  changeShipCount() {
+    this.props.relay.setVariables({
+      shipCount: this.props.relay.variables.shipCount + 1
+    })
+  }
+
+  changeFoo () {
+    this.props.relay.setVariables({
+      foo: 'BAZ'
+    })
+  }
+
 }
 
 export default Relay.createContainer(StarWarsApp, {
+  initialVariables: {
+    shipCount: 1,
+    foo: 'BAR'
+  },
   fragments: {
     factions: () => Relay.QL`
       fragment on Faction @relay(plural: true) {
         id,
         name,
-        ships(first: 10) {
+        ships(first: $shipCount) {
           edges {
             node {
               id,
