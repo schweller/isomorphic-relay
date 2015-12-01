@@ -74,7 +74,7 @@ var empire = {
 
 var inacio = {
   id: '3',
-  name: 'My fucking faction',
+  name: 'WTFaction',
   ships: ['1', '3', '4', '6']
 }
 
